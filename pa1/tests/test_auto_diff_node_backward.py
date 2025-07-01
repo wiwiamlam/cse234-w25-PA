@@ -65,12 +65,17 @@ def test_div():
 def test_div_by_const():
     x1 = ad.Variable("x1")
     y = ad.div_by_const(x1, 5.0)
-    evaluator = ad.Evaluator(eval_nodes=[y])
+    y_grad = ad.Variable("y_grad")
+    x1_grad = y.op.gradient(y, y_grad)[0]
+    evaluator = ad.Evaluator(eval_nodes=[x1_grad])
 
     check_evaluator_output(
         evaluator,
-        input_values={x1: torch.tensor([[-1.0, 2.0, 0.5, 3.4], [0.3, 0.0, -5.8, 3.1]])},
-        expected_outputs=[torch.tensor([[-0.2, 0.4, 0.1, 0.68], [0.06, 0.0, -1.16, 0.62]])],
+        input_values={
+            x1: torch.tensor([[-1.0, 2.0, 0.5, 3.4], [0.3, 0.0, -5.8, 3.1]]),
+            y_grad: torch.ones((2, 4), dtype=torch.float32),
+        },
+        expected_outputs=[torch.tensor([[0.2, 0.2, 0.2, 0.2], [0.2, 0.2, 0.2, 0.2]])],
     )
 
 def test_matmul():
