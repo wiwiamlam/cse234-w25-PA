@@ -39,7 +39,7 @@ if __name__ == "__main__":
     
     if args.test_case == "myallreduce":
 
-        num_runs = 100
+        num_runs = 1000
 
         # Lists to store the execution time for each run
         allreduce_times = []
@@ -47,14 +47,13 @@ if __name__ == "__main__":
 
         # Flag to record if any run has an incorrect result.
         all_runs_correct = True
-
+        arr_length = 64
         for run in range(num_runs):
             # Create a random integer array (each process gets its own random array)
-            r = np.random.randint(0, 100, 100)
+            r = np.random.randint(0, 100, arr_length)
             # Arrays to store the reduction results
-            rr_allreduce   = np.empty(100, dtype=int)
-            rr_myallreduce = np.empty(100, dtype=int)
-
+            rr_allreduce   = np.empty(arr_length, dtype=int)
+            rr_myallreduce = np.empty(arr_length, dtype=int)
             # --- Built-in Allreduce Timing ---
             comm.Barrier()  # Synchronize all processes before timing
             start = MPI.Wtime()
@@ -66,7 +65,9 @@ if __name__ == "__main__":
             # --- Custom myAllreduce Timing ---
             comm.Barrier()  # Synchronize all processes before timing
             start = MPI.Wtime()
-            comm.myAllreduce(r, rr_myallreduce, op=MPI.MIN)
+            #comm.reduce_scatter_and_gather_allreduce(r, rr_myallreduce, op=MPI.MIN)
+            #comm.myAllreduce(r, rr_myallreduce, op=MPI.MIN)
+            comm.ringAllreduce(r, rr_myallreduce, op=MPI.MIN)
             comm.Barrier()  # Synchronize after call
             elapsed_my = MPI.Wtime() - start
             myallreduce_times.append(elapsed_my)
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     elif args.test_case == "myalltoall":
 
         nprocs = comm.Get_size()
-        num_runs = 100
+        num_runs = 1000
 
         # Lists to store the execution times for each run
         alltoall_times = []

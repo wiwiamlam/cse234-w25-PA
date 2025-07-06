@@ -1,5 +1,8 @@
+from re import A
 from mpi4py import MPI
 import numpy as np
+from functools import reduce
+
 
 class Communicator(object):
     def __init__(self, comm: MPI.Comm):
@@ -60,6 +63,45 @@ class Communicator(object):
 
         self.comm.Alltoall(src_array, dest_array)
 
+    def reduce_scatter_and_gather_allreduce(self, src_array, dest_array, op=MPI.SUM):
+        nprocs = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+        reduced = np.empty(int(src_array.size/nprocs), dtype=int)
+        self.comm.Reduce_scatter_block(src_array, reduced, op)
+        # and then all gather
+        self.comm.Allgather(reduced, dest_array)
+
+    def ringAllreduce(self, src_array, dest_array, op=MPI.SUM):
+        nprocs = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+        #print(f"before rank {rank}: src_array: {src_array}")
+        elem_per_rank = int(src_array.size/nprocs)
+        for i in range(nprocs - 1):
+            curr_portion_idx = elem_per_rank * ((rank + nprocs - i) % nprocs)
+            recv_portion_idx = elem_per_rank * ((rank + nprocs + nprocs - 1 - i) % nprocs)
+            #print(f"rank {rank}: curr_portion_idx: {curr_portion_idx} recv_portion_idx: {recv_portion_idx}")
+            recv_from_rank = ((rank + nprocs + nprocs - 1 - i) % nprocs)
+            # reduce to next rank
+            #req1 = self.comm.Ireduce([src_array[curr_portion_idx:curr_portion_idx+elem_per_rank], MPI.INT], [None, MPI.INT], op, root=(rank + 1)%nprocs)
+            # receive to prev rank
+            #req2 = self.comm.Ireduce(MPI.IN_PLACE, [src_array[recv_portion_idx:recv_portion_idx + elem_per_rank], MPI.INT], op, root=rank)
+            req1 = self.comm.Isend([src_array[curr_portion_idx:curr_portion_idx+elem_per_rank], MPI.INT], dest=(rank +1)%nprocs)
+            req2 = self.comm.Irecv([dest_array[recv_portion_idx:recv_portion_idx+elem_per_rank], MPI.INT], source=recv_from_rank)
+            MPI.Request.Waitall([req1, req2])
+            src_array[recv_portion_idx:recv_portion_idx+elem_per_rank] = reduce(np.minimum, [src_array[recv_portion_idx:recv_portion_idx+elem_per_rank], dest_array[recv_portion_idx:recv_portion_idx+elem_per_rank]])
+            if i == nprocs - 2:
+                dest_array[recv_portion_idx:recv_portion_idx+elem_per_rank] = src_array[recv_portion_idx:recv_portion_idx+elem_per_rank]
+        #print(f"after rank {rank}: src_array: {src_array}")
+        for i in range(nprocs - 1):
+            send_portion_idx = elem_per_rank * ((rank + nprocs + nprocs + 1 - i) % nprocs)
+            recv_portion_idx = elem_per_rank * ((rank + nprocs - i) % nprocs)
+            recv_from_rank = ((rank + nprocs + nprocs - 1 - i) % nprocs)
+            req1 = self.comm.Isend([src_array[send_portion_idx:send_portion_idx+elem_per_rank], MPI.INT], dest=(rank+1)%nprocs)
+            req2 = self.comm.Irecv([dest_array[recv_portion_idx:recv_portion_idx+elem_per_rank], MPI.INT], source=recv_from_rank)
+            MPI.Request.Waitall([req1, req2])
+
+        #print(f"after rank {rank}: dest_array: {dest_array}")
+
     def myAllreduce(self, src_array, dest_array, op=MPI.SUM):
         """
         A manual implementation of all-reduce using a reduce-to-root
@@ -73,7 +115,34 @@ class Communicator(object):
           - For non-root processes: one send and one receive.
           - For the root process: (n-1) receives and (n-1) sends.
         """
-        #TODO: Your code here
+        nprocs = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+        if rank == 0:
+            # get from all
+            reqs, bufs = [], [src_array]
+            for i in range(nprocs):
+                if i != rank:
+                    buf = np.empty_like(src_array)
+                    req = self.comm.Irecv([buf, MPI.INT], source=i)
+                    bufs.append(buf)
+                    reqs.append(req)
+            MPI.Request.Waitall(reqs)
+            dest_array[:] = reduce(np.minimum, bufs)
+
+            # don't use this one since it send obj (unoptimized)
+            # dest_array[:] = self.comm.bcast(dest_array)
+            self.comm.Bcast([dest_array, MPI.INT], root=0)
+            #for i in range(nprocs):
+            #    if i != rank:
+            #        self.comm.send(dest_array, dest=i)
+        else:
+            # send its data to rank0 first
+            self.comm.Isend([src_array, MPI.INT], dest=0)
+            # using mpi broadcast
+            # don't use the following too for the same reasons on above
+            # dest_array[:] = self.comm.bcast(dest_array)
+
+            self.comm.Bcast([dest_array, MPI.INT], root=0)
 
     def myAlltoall(self, src_array, dest_array):
         """
@@ -90,4 +159,16 @@ class Communicator(object):
             
         The total data transferred is updated for each pairwise exchange.
         """
-        #TODO: Your code here
+        nprocs = self.comm.Get_size()
+        rank = self.comm.Get_rank()
+        reqs = []
+        for i in range(nprocs):
+            if i != rank:
+                send_req = self.comm.Isend([src_array[i:i+1], MPI.INT], dest=i)
+                recv_req = self.comm.Irecv([dest_array[i:i+1], MPI.INT], source=i)
+                reqs.append(send_req)
+                reqs.append(recv_req)
+                #self.comm.Sendrecv(sendbuf=src_array[i:i+1], dest=i, recvbuf=dest_array[i:i+1], source=i)
+            else:
+                dest_array[i] = src_array[i]
+        MPI.Request.Waitall(reqs)
