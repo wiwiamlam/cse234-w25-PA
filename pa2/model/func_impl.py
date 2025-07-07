@@ -11,6 +11,15 @@ def get_info(
     in_dim: int,
     out_dim: int,
 ):
+
+    """
+    DP-TP paradigram
+    2DP-4TP
+         TP0 TP1 TP2 TP3
+    DP-0  .   .   .   .
+    DP-1  .   .   .   .
+
+    """
     """
     Prepare necessary information for later communications in forward and backward passes.
 
@@ -49,7 +58,19 @@ def get_info(
     part_out_dim : int
         The partitioned output dimension for the FC layer.
     """
-    #TODO: Your code here
+    part_in_dim, part_out_dim = -1, -1
+    dp_idx, mp_idx = rank // 4, rank % 4
+    #print(f"rank{rank}: fc_layer: {fc_layer}")
+    if fc_layer != 'fc_o':
+        part_in_dim = in_dim
+        part_out_dim = out_dim // mp_size
+    else:
+        part_in_dim = in_dim // mp_size
+        part_out_dim = out_dim
+
+    dp_comm = comm.Split(key=rank, color=mp_idx)
+    mp_comm = comm.Split(key=rank, color=dp_idx)
+
     return mp_idx, dp_idx, mp_comm, dp_comm, part_in_dim, part_out_dim
 
 def naive_collect_forward_input(
@@ -65,7 +86,14 @@ def naive_collect_forward_input(
     After gathering, the full input should have shape:
       (batch_size, seq_length, part_in_dim * mp_size)
     """
-    #TODO: Your code here
+    batch_size, seq_length, part_in_dim = x.shape
+    collected_x = np.zeros(batch_size * seq_length * part_in_dim * mp_size, dtype=np.float64)
+    mp_comm.Allgather(x.flatten(), collected_x)
+    #print(f"before reshape rank{mp_comm.Get_rank()} collected_x: {np.array2string(collected_x, separator=', ')}")
+    collected_x = collected_x.reshape(mp_size, batch_size, seq_length, part_in_dim)
+    #print(f"before concat rank{mp_comm.Get_rank()}: shape: {collected_x.shape} collected_x: {collected_x}")
+    collected_x = np.concatenate(np.split(collected_x, mp_size, axis=0), axis=3)[0]
+    #print(f"rank{mp_comm.Get_rank()}: collected_x: {collected_x}")
     return collected_x
 
 
@@ -82,8 +110,7 @@ def naive_collect_forward_output(
     After gathering, the full output should have shape:
       (batch_size, seq_length, part_out_dim * mp_size)
     """
-    #TODO: Your code here
-    return collected_out
+    return naive_collect_forward_input(out, mp_comm, mp_size)
 
 def naive_collect_backward_output(
     output_grad: np.ndarray,
@@ -115,8 +142,10 @@ def naive_collect_backward_output(
         The local output gradient for this MP node with shape 
         (batch_size, seq_length, out_dim // mp_size).
     """
-    #TODO: Your code here
-
+    out_dim = output_grad.shape[-1]
+    elems_per_rank = out_dim // mp_size
+    start, end = mp_group_idx*elems_per_rank, mp_group_idx*elems_per_rank + elems_per_rank
+    return output_grad[:, :, start:end]
 
 def naive_collect_backward_x(
     grad_x: np.ndarray,
@@ -150,4 +179,11 @@ def naive_collect_backward_x(
         The reduced and scattered grad_x with shape 
         (batch_size, seq_length, in_dim // mp_size).
     """
-    #TODO: Your code here
+    rank = mp_comm.Get_rank()
+    batch_size, seq_length, in_dim = grad_x.shape
+    src_array = grad_x.T.flatten()
+    dst_array = np.empty((seq_length * in_dim * batch_size) // mp_size, dtype=np.float64)
+    mp_comm.Reduce_scatter_block(src_array, dst_array, MPI.SUM)
+
+    dst_array = dst_array.reshape(in_dim // mp_size, seq_length).T.reshape(batch_size, seq_length, in_dim//mp_size)
+    return dst_array

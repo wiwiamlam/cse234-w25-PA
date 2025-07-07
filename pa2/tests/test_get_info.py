@@ -22,12 +22,12 @@ def check_info(
         out_dim=input_dict["out_dim"],
     )
 
+    #print(f"rank{rank}: mp_group_idx: {mp_group_idx}, dp_group_idx: {dp_group_idx}, part_in_dim: {part_in_dim}, part_out_dim: {part_out_dim}")
     # Check communicator indices.
     assert mp_group_idx == expect_output_dict["mp_group_idx"][rank]
     assert dp_group_idx == expect_output_dict["dp_group_idx"][rank]
     assert part_in_dim == expect_output_dict["part_in_dim"]
     assert part_out_dim == expect_output_dict["part_out_dim"]
-
     local_arr = input_dict["input_array"][rank]
 
     mp_group_reduction_arr = np.empty_like(local_arr)
@@ -37,7 +37,6 @@ def check_info(
     mp_comm.Allreduce(local_arr, mp_group_reduction_arr, op=MPI.SUM)
     # Allreduce over the data-parallel communicator (grouped by mp_idx).
     dp_comm.Allreduce(local_arr, dp_group_reduction_arr, op=MPI.SUM)
-
     np.testing.assert_allclose(
         actual=mp_group_reduction_arr,
         desired=expect_output_dict["mp_group_array"][dp_group_idx],

@@ -41,5 +41,10 @@ def split_data(
         - The data length is guaranteed to be divisible by dp_size.
         - Do not shuffle the data indices as shuffling will be done later.
     """
-
-    #TODO: Your code here
+    dp_group = rank // mp_size
+    nb_batch = len(x_train)
+    elems_per_dp_group = nb_batch // dp_size
+    #print(f"type: {type(elems_per_dp_group)}")
+    #print(f"x_train.shape: {x_train.shape}, y_train.shape: {y_train.shape}")
+    start, end = dp_group*elems_per_dp_group, dp_group*elems_per_dp_group + elems_per_dp_group
+    return x_train[start:end], y_train[start:end]
